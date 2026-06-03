@@ -13,11 +13,11 @@ TODO: Make the program and get some cool pictures >-<
 Requirements:
 
 ```
-Raylib > 6.0
+Raylib > 6.0 (although might work with older versions)
 CMake > 3.16
 ```
 
-To builb you can use the included bash scripts or:
+To build you can use the included bash scripts or:
 
 ```bash
 # Not needed if this is your first time building
