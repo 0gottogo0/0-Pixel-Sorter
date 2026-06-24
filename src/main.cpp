@@ -10,8 +10,8 @@ extern "C" {
 
 
 /* Cursor related functions */
-Rectangle cursor = {static_cast<float>(GetMouseX()), static_cast<float>(GetMouseY()), 1.00, 1.00};
-Rectangle lastCursor = {static_cast<float>(GetMouseX()), static_cast<float>(GetMouseY()), 1.00, 1.00};
+Rectangle cursor = {(float)(GetMouseX()), (float)(GetMouseY()), 1.00, 1.00};
+Rectangle lastCursor = {(float)(GetMouseX()), (float)(GetMouseY()), 1.00, 1.00};
 
 /* UI related */
 int currentTab = 0;
@@ -20,7 +20,7 @@ bool changingContrastType = false;
 
 // Image movement stuff
 Vector2 imagePos = {0.00,0.00};
-float imageScale = 0; // this gets offset to cover the entire screen so 0 is the entire screen
+float imageScale = 0; // 0 covers the entire screen
 
 // Actual clickable buttons
 Rectangle welcomeTabButton;
@@ -38,6 +38,9 @@ Rectangle blueContrastButton;
 Rectangle lowerContrastSlider;
 Rectangle upperContrastSlider;
 
+Rectangle sortButton;
+Rectangle resetSortButton;
+
 // UI elements that should be drawn
 Rectangle tabBarBackground;
 Rectangle sidebarBackground;
@@ -47,7 +50,6 @@ Rectangle loadingBarBackground;
 Rectangle lowerContrastSliderBackround;
 Rectangle upperContrastSliderBackround;
 
-
 /* Image related */
 bool hasImageLoaded = false;
 bool imageContrastShown = false;
@@ -56,9 +58,11 @@ Image originalImage;
 Texture2D originalTex;
 Image contrastImage;
 Texture2D contrastTex;
-Image sortUpDown;
-Image sortLeftRight;
-Texture2D modifiedTex;
+Image sortedImage;
+Texture2D sortedTex;
+
+// Brighter goes towards vector
+Vector2 sortDirectionVector = { 1, 0};
 
 // Contrast stuffs
 enum ContrastType {
@@ -72,16 +76,30 @@ ContrastType currentContrastType = Brightness;
 int contrastLow = 50;
 int contrastHigh = 200;
 
-void ContrastMask(ContrastType type) {
-    contrastImage = LoadImage(imageFilePath);
-    
-    int imageXSize = contrastImage.width;
-    int imageYSize = contrastImage.height;
+int GetBrightnessPerPixel(Color pixel) {
+    switch (currentContrastType) {
+        case Brightness:
+            return (pixel.r + pixel.g + pixel.b) / 3;
+            break;
+        case Red:
+            return pixel.r;
+            break;
+        case Green:
+            return pixel.g;
+            break;
+        case Blue:
+            return pixel.b;
+            break;
+    }
+}
 
-    for (int x = 0; x < imageXSize; x++) {
-        for (int y = 0; y < imageYSize; y++) {
+void ContrastMask() { 
+    contrastImage = LoadImage(imageFilePath);
+
+    for (int x = 0; x < contrastImage.width; x++) {
+        for (int y = 0; y < contrastImage.height; y++) {
             Color currentPixelColor = GetImageColor(contrastImage, x, y);
-            switch (type) {
+            switch (currentContrastType) {
                 case Brightness:
                     if ((currentPixelColor.r + currentPixelColor.g + currentPixelColor.b) / 3 >= contrastLow && (currentPixelColor.r + currentPixelColor.g + currentPixelColor.b) / 3 <= contrastHigh) {
                         ImageDrawPixel(&contrastImage, x, y, LIGHTGRAY);
@@ -117,12 +135,138 @@ void ContrastMask(ContrastType type) {
     contrastTex = LoadTextureFromImage(contrastImage);
 }
 
+void SortImage() {
+    UnloadImage(sortedImage);
+    sortedImage = LoadImage(imageFilePath);
+
+    // Right or Left
+    if (sortDirectionVector.x != 0) {
+        for (int y = 0; y < sortedImage.height; y++) {
+            Color rowColor[sortedImage.width];
+
+            // Get current row into an array
+            for (int x = 0; x < sortedImage.width; x++) {
+                rowColor[x] = GetImageColor(sortedImage, x, y);
+            }
+
+            // Process and sort spars
+            int sparStart = -1;
+            for (int x = 0; x < sortedImage.width; x++) {
+                bool inRange = x < sortedImage.width && ColorIsEqual(GetImageColor(contrastImage, x, y), LIGHTGRAY);
+
+                if (inRange && sparStart == -1) {
+                    // Start of new spar
+                    sparStart = x;
+                } else if ((!inRange || x == sortedImage.width - 1) && sparStart != -1) {
+                    // End of current spar
+                    int sparEnd = x - 1;
+                    int sparLength = sparEnd - sparStart + 1;
+                    
+                    // Sort it
+                    // Bubble sort
+                    for (int i = 0; i < sparLength - 1; i++) {
+                        for (int j = 0; j < sparLength - i - 1; j++) {
+                            
+                            // Right
+                            if (sortDirectionVector.x > 0) {
+                                if (GetBrightnessPerPixel(rowColor[sparStart + j]) > GetBrightnessPerPixel(rowColor[sparStart + j + 1])) {
+                                    Color tmp = rowColor[sparStart + j];
+                                    rowColor[sparStart + j] = rowColor[sparStart + j + 1];
+                                    rowColor[sparStart + j + 1] = tmp;
+                                }
+                                
+                            // Left
+                            } else if (sortDirectionVector.x < 0) {
+                                if (GetBrightnessPerPixel(rowColor[sparStart + j]) < GetBrightnessPerPixel(rowColor[sparStart + j + 1])) {
+                                    Color tmp = rowColor[sparStart + j];
+                                    rowColor[sparStart + j] = rowColor[sparStart + j + 1];
+                                    rowColor[sparStart + j + 1] = tmp;
+                                }
+                            }
+                        }
+                    }
+
+                    // Restart for next spar
+                    sparStart = -1;
+                }
+            }
+
+            // Get sorted row back into image
+            for (int x = 0; x < sortedImage.width; x++) {
+                ImageDrawPixel(&sortedImage, x, y, rowColor[x]);
+            }
+        }
+    }
+
+    // Up or down
+    if (sortDirectionVector.y != 0) {
+        for (int x = 0; x < sortedImage.width; x++) {
+            Color colColor[sortedImage.height];
+
+            // Get current row into an array
+            for (int y = 0; y < sortedImage.height; y++) {
+                colColor[y] = GetImageColor(sortedImage, x, y);
+            }
+
+            // Process and sort spars
+            int sparStart = -1;
+            for (int y = 0; y < sortedImage.height; y++) {
+                bool inRange = y < sortedImage.height && ColorIsEqual(GetImageColor(contrastImage, x, y), LIGHTGRAY);
+
+                if (inRange && sparStart == -1) {
+                    // Start of new spar
+                    sparStart = y;
+                } else if ((!inRange || y == sortedImage.height) && sparStart != -1) {
+                    // End of current spar
+                    int sparEnd = y - 1;
+                    int sparLength = sparEnd - sparStart + 1;
+
+                    // Sort it
+                    // Bubble sort
+                    for (int i = 0; i < sparLength - 1; i++) {
+                        for (int j = 0; j < sparLength - i - 1; j++) {
+                            
+                            // Up
+                            if (sortDirectionVector.y > 0) {
+                                if (GetBrightnessPerPixel(colColor[sparStart + j]) > GetBrightnessPerPixel(colColor[sparStart + j + 1])) {
+                                    Color tmp = colColor[sparStart + j];
+                                    colColor[sparStart + j] = colColor[sparStart + j + 1];
+                                    colColor[sparStart + j + 1] = tmp;
+                                }
+                                
+                            // Down
+                            } else if (sortDirectionVector.y < 0) {
+                                if (GetBrightnessPerPixel(colColor[sparStart + j]) < GetBrightnessPerPixel(colColor[sparStart + j + 1])) {
+                                    Color tmp = colColor[sparStart + j];
+                                    colColor[sparStart + j] = colColor[sparStart + j + 1];
+                                    colColor[sparStart + j + 1] = tmp;
+                                }
+                            }
+                        }
+                    }
+
+                    // Restart for next spar
+                    sparStart = -1;
+                }
+            }
+
+            // Get sorted row back into image
+            for (int y = 0; y < sortedImage.width; y++) {
+                ImageDrawPixel(&sortedImage, x, y, colColor[y]);
+            }
+        }
+    }
+
+    UnloadTexture(sortedTex);
+    sortedTex = LoadTextureFromImage(sortedImage);
+}
+
 void WelcomeTab() {
     // Tutorial area
-    Rectangle learnMoreButtion = {  static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.30), 
-                                    static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 1.30), 
-                                    static_cast<float>(GetRenderWidth() - GetRenderHeight() * tabsBarSizePercent * 2.60), 
-                                    static_cast<float>(GetRenderHeight() / 7.00 - GetRenderHeight() * tabsBarSizePercent * 1.60)};
+    Rectangle learnMoreButtion = {  (float)(GetRenderHeight() * tabsBarSizePercent * 2.30), 
+                                    (float)(GetRenderHeight() * tabsBarSizePercent * 1.30), 
+                                    (float)(GetRenderWidth() - GetRenderHeight() * tabsBarSizePercent * 2.60), 
+                                    (float)(GetRenderHeight() / 7.00 - GetRenderHeight() * tabsBarSizePercent * 1.60)};
     DrawRectangleLinesEx(learnMoreButtion, 1.00, RAYWHITE);
     DrawText("Click here to learn more!", 
             GetRenderHeight() * tabsBarSizePercent * 2.60, 
@@ -144,15 +288,15 @@ void WelcomeTab() {
     }
 
     // Load image
-    Rectangle loadImageButtion = {  static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.30), 
-                                    static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 1.60) + static_cast<float>(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
-                                    static_cast<float>(GetRenderWidth() - GetRenderHeight() * tabsBarSizePercent * 2.60), 
-                                    static_cast<float>(GetRenderHeight() / 1.50 - GetRenderHeight() * tabsBarSizePercent * 1.60)};
+    Rectangle loadImageButtion = {  (float)(GetRenderHeight() * tabsBarSizePercent * 2.30), 
+                                    (float)(GetRenderHeight() * tabsBarSizePercent * 1.60) + (float)(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
+                                    (float)(GetRenderWidth() - GetRenderHeight() * tabsBarSizePercent * 2.60), 
+                                    (float)(GetRenderHeight() / 1.50 - GetRenderHeight() * tabsBarSizePercent * 1.60)};
     DrawRectangleLinesEx(loadImageButtion, 1.00, RAYWHITE);
     if (!hasImageLoaded) {
         DrawText("Load an image", 
                 GetRenderHeight() * tabsBarSizePercent * 2.60, 
-                GetRenderHeight() * tabsBarSizePercent * 1.80 + static_cast<float>(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
+                GetRenderHeight() * tabsBarSizePercent * 1.80 + (float)(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
                 GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.80, 
                 RAYWHITE);
         if (CheckCollisionRecs(cursor, loadImageButtion) && IsMouseButtonPressed(0)) {
@@ -164,16 +308,19 @@ void WelcomeTab() {
                                                         0);
             if (imageFilePath != NULL) {
                 originalImage = LoadImage(imageFilePath);
-                ContrastMask(currentContrastType);
+                sortedImage = LoadImage(imageFilePath);
+                ContrastMask();
                 if (originalImage.data != NULL && IsImageValid(originalImage)) {
                     originalTex = LoadTextureFromImage(originalImage);
+                    contrastTex = LoadTextureFromImage(contrastImage);
+                    sortedTex = LoadTextureFromImage(sortedImage);
                     hasImageLoaded = true;
                 }
             }
         } else {
             DrawText("No image loaded!", 
                     GetRenderHeight() * tabsBarSizePercent * 2.60, 
-                    GetRenderHeight() * tabsBarSizePercent * 2.80 + static_cast<float>(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
+                    GetRenderHeight() * tabsBarSizePercent * 2.80 + (float)(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
                     GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.80, 
                     RAYWHITE);
         }
@@ -181,18 +328,21 @@ void WelcomeTab() {
     } else {
         DrawText("Image loaded!", 
                 GetRenderHeight() * tabsBarSizePercent * 2.60, 
-                GetRenderHeight() * tabsBarSizePercent * 1.80 + static_cast<float>(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
+                GetRenderHeight() * tabsBarSizePercent * 1.80 + (float)(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
                 GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.80, 
                 RAYWHITE);
         DrawText(imageFilePath, 
                 GetRenderHeight() * tabsBarSizePercent * 2.60, 
-                GetRenderHeight() * tabsBarSizePercent * 2.80 + static_cast<float>(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
+                GetRenderHeight() * tabsBarSizePercent * 2.80 + (float)(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
                 GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.80, 
                 RAYWHITE);
         if (CheckCollisionRecs(cursor, loadImageButtion) && IsMouseButtonPressed(0)) {
             UnloadImage(originalImage);
             UnloadTexture(originalTex);
             UnloadImage(contrastImage);
+            UnloadTexture(contrastTex);
+            UnloadImage(sortedImage);
+            UnloadTexture(sortedTex);
             hasImageLoaded = false;
             imagePos = {0, 0};
             imageScale = 0;
@@ -200,19 +350,19 @@ void WelcomeTab() {
     }
 
     // Export image
-    Rectangle exportImageButtion = {static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.30), 
-                                    static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 1.90) + static_cast<float>(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60) + static_cast<float>(GetRenderHeight() / 1.50 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
-                                    static_cast<float>(GetRenderWidth() - GetRenderHeight() * tabsBarSizePercent * 2.60), 
-                                    static_cast<float>(GetRenderHeight() / 3.50 - GetRenderHeight() * tabsBarSizePercent * 1.60)};
+    Rectangle exportImageButtion = {(float)(GetRenderHeight() * tabsBarSizePercent * 2.30), 
+                                    (float)(GetRenderHeight() * tabsBarSizePercent * 1.90) + (float)(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60) + (float)(GetRenderHeight() / 1.50 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
+                                    (float)(GetRenderWidth() - GetRenderHeight() * tabsBarSizePercent * 2.60), 
+                                    (float)(GetRenderHeight() / 3.50 - GetRenderHeight() * tabsBarSizePercent * 1.60)};
     DrawRectangleLinesEx(exportImageButtion, 1.00, RAYWHITE);
     DrawText("Export image", 
                     GetRenderHeight() * tabsBarSizePercent * 2.60, 
-                    static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.20) + static_cast<float>(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60) + static_cast<float>(GetRenderHeight() / 1.50 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
+                    (float)(GetRenderHeight() * tabsBarSizePercent * 2.20) + (float)(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60) + (float)(GetRenderHeight() / 1.50 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
                     GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.80, 
                     RAYWHITE);
     DrawText("Exported to: ", 
                     GetRenderHeight() * tabsBarSizePercent * 2.60, 
-                    static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 3.20) + static_cast<float>(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60) + static_cast<float>(GetRenderHeight() / 1.50 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
+                    (float)(GetRenderHeight() * tabsBarSizePercent * 3.20) + (float)(GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.60) + (float)(GetRenderHeight() / 1.50 - GetRenderHeight() * tabsBarSizePercent * 1.60), 
                     GetRenderHeight() / 7 - GetRenderHeight() * tabsBarSizePercent * 1.80, 
                     RAYWHITE);
 }
@@ -220,7 +370,7 @@ void WelcomeTab() {
 void ImageTab() {
     // Move image around
     if (!CheckCollisionRecs(cursor, tabBarBackground) && !CheckCollisionRecs(cursor, sidebarBackground) && IsMouseButtonDown(0)) {
-        Vector2 cursorDifference = {static_cast<float>((cursor.x - lastCursor.x) * 1.00), static_cast<float>((cursor.y - lastCursor.y) * 1.00)};
+        Vector2 cursorDifference = {(float)((cursor.x - lastCursor.x) * 1.00), (float)((cursor.y - lastCursor.y) * 1.00)};
         imagePos = {imagePos.x + cursorDifference.x, imagePos.y + cursorDifference.y}; 
     }
 
@@ -240,7 +390,7 @@ void ImageTab() {
     if (hasImageLoaded && imageContrastShown) {
         DrawTextureEx(contrastTex, newImagePos, 0.00, newImageScale, WHITE);
     } else if (hasImageLoaded && !imageContrastShown) {
-        DrawTextureEx(originalTex, newImagePos, 0.00, newImageScale, WHITE);
+        DrawTextureEx(sortedTex, newImagePos, 0.00, newImageScale, WHITE);
     } else {
         DrawText("No image loaded!", 
             GetRenderHeight() * tabsBarSizePercent * 2.60, 
@@ -252,6 +402,9 @@ void ImageTab() {
     // Loading bar
     DrawRectangleRec(loadingBarBackground, GRAY);
     DrawLine(loadingBarBackground.x, loadingBarBackground.y, GetRenderWidth(), loadingBarBackground.y, RAYWHITE);
+
+    // DEBUG
+    printf("low: %d | high: %d\n", contrastLow, contrastHigh);
 }
 
 void SettingsTab() {
@@ -268,20 +421,20 @@ int main() {
 
     while (!WindowShouldClose()) {
         /* Update values every run */
-        cursor = {static_cast<float>(GetMouseX()), static_cast<float>(GetMouseY()), 1, 1};
+        cursor = {(float)(GetMouseX()), (float)(GetMouseY()), 1, 1};
 
         // Update button values now
         welcomeTabButton = {0.00, 
                             0.00, 
-                            static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 4.20), 
+                            (float)(GetRenderHeight() * tabsBarSizePercent * 4.20), 
                             GetRenderHeight() * tabsBarSizePercent};
         imageTabButton = {  welcomeTabButton.width, 
                             0.00, 
-                            static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.90), 
+                            (float)(GetRenderHeight() * tabsBarSizePercent * 2.90), 
                             GetRenderHeight() * tabsBarSizePercent};
         settingsTabButton = {welcomeTabButton.width + imageTabButton.width, 
                             0.00, 
-                            static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 4.40), 
+                            (float)(GetRenderHeight() * tabsBarSizePercent * 4.40), 
                             GetRenderHeight() * tabsBarSizePercent};
         increaseTabButton = {GetRenderWidth() - GetRenderHeight() * tabsBarSizePercent, 
                             0, 
@@ -293,34 +446,43 @@ int main() {
                             GetRenderHeight() * tabsBarSizePercent};
         toggleContrastViewButton = {0,    
                                     GetRenderHeight() * tabsBarSizePercent, 
-                                    static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
-                                    static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00)};
+                                    (float)(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
+                                    (float)(GetRenderHeight() * tabsBarSizePercent * 2.00)};
         brightnessContrastButton = {0,    
                                     GetRenderHeight() * tabsBarSizePercent + toggleContrastViewButton.height, 
-                                    static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
-                                    static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00)};
+                                    (float)(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
+                                    (float)(GetRenderHeight() * tabsBarSizePercent * 2.00)};
         redContrastButton = {0,    
                             brightnessContrastButton.height + brightnessContrastButton.y, 
-                            static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
-                            static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00)};
+                            (float)(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
+                            (float)(GetRenderHeight() * tabsBarSizePercent * 2.00)};
         greenContrastButton = { 0,    
                                 redContrastButton.height + redContrastButton.y, 
-                                static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
-                                static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00)};
+                                (float)(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
+                                (float)(GetRenderHeight() * tabsBarSizePercent * 2.00)};
         blueContrastButton = {  0,    
                                 greenContrastButton.height + greenContrastButton.y, 
-                                static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
-                                static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00)};
+                                (float)(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
+                                (float)(GetRenderHeight() * tabsBarSizePercent * 2.00)};
 
+        sortButton = {  0,    
+                        (float)(GetRenderHeight() - GetRenderHeight() * tabsBarSizePercent * 4.00), 
+                        (float)(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
+                        (float)(GetRenderHeight() * tabsBarSizePercent * 4.00)};
+
+        resetSortButton = { 0,    
+                            (float)(GetRenderHeight() - GetRenderHeight() * tabsBarSizePercent * 6.00), 
+                            (float)(GetRenderHeight() * tabsBarSizePercent * 2.00) - 1, 
+                            (float)(GetRenderHeight() * tabsBarSizePercent * 2.00)};
 
         // Now Drawn UI elements
         tabBarBackground = {0.00, 
                             0.00, 
-                            static_cast<float>(GetRenderWidth()), 
+                            (float)(GetRenderWidth()), 
                             GetRenderHeight() * tabsBarSizePercent};
         sidebarBackground = {0.00, 
                             tabBarBackground.height, 
-                            static_cast<float>(GetRenderHeight() * tabsBarSizePercent * 2.00), 
+                            (float)(GetRenderHeight() * tabsBarSizePercent * 2.00), 
                             GetRenderHeight() - tabBarBackground.height};
 
         loadingBarBackground = {sidebarBackground.width, 
@@ -342,14 +504,17 @@ int main() {
             currentTab++;
         } else if (CheckCollisionRecs(cursor, decreaseTabButton) && IsMouseButtonPressed(0) || IsKeyPressed(KEY_LEFT_BRACKET)) {
             currentTab--;
-        } else if (currentTab > 3) {
-            currentTab = 3;
+        } 
+        
+        if (currentTab > 2) {
+            currentTab = 2;
         } 
         
         if (currentTab < 0) {
             currentTab = 0;
         }
 
+        /* Contrast and image manipulation */
         if (IsKeyPressed(KEY_C) || CheckCollisionRecs(cursor, toggleContrastViewButton) && IsMouseButtonPressed(0)) {
             if (imageContrastShown) {
                 imageContrastShown = false;
@@ -373,26 +538,88 @@ int main() {
                 currentContrastType = Blue;
             }
 
-            ContrastMask(currentContrastType);
+            if (!changingContrastType) {
+                ContrastMask();
+            }
         } else {
             if (CheckCollisionRecs(cursor, brightnessContrastButton) && IsMouseButtonPressed(0)) {
                 changingContrastType = true;
             }
+        }
+
+        /*if (IsKeyPressed(KEY_A)) {
+            changingContrastType = false;
+            currentContrastType = Brightness;
+            ContrastMask();
+        } else if (IsKeyPressed(KEY_S)) {
+            changingContrastType = false;
+            currentContrastType = Red;
+            ContrastMask();
+        } else if (IsKeyPressed(KEY_D)) {
+            changingContrastType = false;
+            currentContrastType = Green;
+            ContrastMask();
+        } else if (IsKeyPressed(KEY_F)) {
+            changingContrastType = false;
+            currentContrastType = Blue;
+            ContrastMask();
+        }*/
+
+        if (IsKeyPressed(KEY_Q)) {
+            contrastLow = contrastLow + 5;
+            ContrastMask();
+        } else if (IsKeyPressed(KEY_A)) {
+            contrastLow = contrastLow - 5;
+            ContrastMask();
+        }
+
+        if (IsKeyPressed(KEY_W)) {
+            contrastHigh = contrastHigh + 5;
+            ContrastMask();
+        } else if (IsKeyPressed(KEY_S)) {
+            contrastHigh = contrastHigh - 5;
+            ContrastMask();
+        }
+
+        if (IsKeyPressed(KEY_R) || CheckCollisionRecs(cursor, resetSortButton) && IsMouseButtonPressed(0)) {
+            UnloadImage(sortedImage);
+            sortedImage = LoadImage(imageFilePath);
+            UnloadTexture(sortedTex);
+            sortedTex = LoadTextureFromImage(sortedImage);
+        }
+
+        if (sortDirectionVector.x > 1) {
+            sortDirectionVector.x = 1;
+        } else if (sortDirectionVector.x < -1) {
+            sortDirectionVector.x = -1;
+        }
+
+        if (sortDirectionVector.y > 1) {
+            sortDirectionVector.y = 1;
+        } else if (sortDirectionVector.y < -1) {
+            sortDirectionVector.y = -1;
+        }
+
+        if (IsKeyPressed(KEY_J)) {
+            sortDirectionVector.x--;
+        } else if (IsKeyPressed(KEY_L)) {
+            sortDirectionVector.x++;
+        } else if (IsKeyPressed(KEY_I)) {
+            sortDirectionVector.y--;
+        } else if (IsKeyPressed(KEY_K)) {
+            sortDirectionVector.y++;
+        }
+
+        if (IsKeyPressed(KEY_ENTER) || CheckCollisionRecs(cursor, sortButton) && IsMouseButtonPressed(0)) {
+            SortImage();
         }
         
         /* Drawing */
         BeginDrawing();
         ClearBackground(DARKGRAY);
 
-        // Draw tab bar after other stuff
-        //DrawRectangleRec(tabBarBackground, GRAY);
-
-        // draw the tabs contents
+        // Draw the tab
         switch (currentTab) {
-            default:
-                // thought this was funny
-                DrawText("go back :(", GetRenderWidth() / 2, GetRenderHeight() / 2, 50, RAYWHITE);
-                break;
             case 0:
                 WelcomeTab();
                 DrawRectangleRec(tabBarBackground, GRAY);
@@ -410,7 +637,7 @@ int main() {
                 break;
         }
 
-        // Continue Drawing the tab bar
+        // Draw the tab bar
         DrawLine(imageTabButton.x, 0.00, imageTabButton.x, tabBarBackground.height, RAYWHITE);
         DrawLine(settingsTabButton.x, 0.00, settingsTabButton.x, tabBarBackground.height, RAYWHITE);
         DrawLine(settingsTabButton.x, 0.00, settingsTabButton.x, tabBarBackground.height, RAYWHITE);
@@ -433,7 +660,7 @@ int main() {
             DrawRectangleRec(toggleContrastViewButton, DARKGRAY);
         }
 
-        else if (changingContrastType) {
+        if (changingContrastType) {
             DrawRectangleRec(brightnessContrastButton, LIGHTGRAY);
             DrawLine(0, redContrastButton.y, sidebarBackground.width, redContrastButton.y, RAYWHITE);
             DrawRectangleRec(redContrastButton, MAROON);
@@ -462,6 +689,9 @@ int main() {
                     break;
             }
         }
+
+        DrawRectangleRec(resetSortButton, LIGHTGRAY);
+        DrawRectangleRec(sortButton, DARKGREEN);
 
         DrawLine(0, tabBarBackground.height + toggleContrastViewButton.height, sidebarBackground.width, tabBarBackground.height + toggleContrastViewButton.height, RAYWHITE);
         EndDrawing();
